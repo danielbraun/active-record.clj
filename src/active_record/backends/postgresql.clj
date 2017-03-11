@@ -41,7 +41,7 @@
 (defmethod column->schema "int4" [_] s/Int)
 (defmethod column->schema "int8" [_] Long)
 (defmethod column->schema "interval" [_] Interval)
-(defmethod column->schema "numberic" [_] s/Num)
+(defmethod column->schema "numeric" [_] s/Num)
 (defmethod column->schema "text" [_] s/Str)
 (defmethod column->schema "timestamptz" [_] s/Inst)
 (defmethod column->schema "varchar" [_] s/Str)
@@ -70,7 +70,7 @@
                  (#{"YES"} is_nullable) s/maybe)]))
        (into {})))
 
-(defn base [{:keys [db table]}]
+(defn base [db table]
   (let [pk-clause (fn [this]
                     [:= (table-primary-key db table) (#'ar/id this)])
         coerce (fn [datum]
