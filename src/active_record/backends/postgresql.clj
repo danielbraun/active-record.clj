@@ -50,20 +50,34 @@
   (fn [s]
     (<= (count (str s)) n)))
 
+
+(defn enum-schema [db {:keys [oid]}]
+  (->> (sql/format {:select [:enumlabel]
+                    :from [:pg_enum]
+                    :where [:= :enumtypid oid]})
+       (jdbc/query db)
+       (map :enumlabel)
+       (apply s/enum)))
+
 (defn table-schema [db table]
   {:post [(not-empty %)]}
-  (->> (sql/format {:select [:*]
-                    :from [:information_schema.columns]
+  (->> (sql/format {:select [:* :b.oid]
+                    :from [[:information_schema.columns :a]]
+                    :join [[:pg_catalog.pg_type :b] [:= :a.udt_name :b.typname]]
                     :where [:= :table_name (name table)]})
        (jdbc/query db)
        (map (fn [{:keys [column_name
                          character_maximum_length
                          column_default
                          data_type
-                         is_nullable] :as column}]
+                         is_nullable
+                         typinput
+                         oid] :as column}]
               [(cond-> (keyword column_name)
                  (or (#{"YES"} is_nullable) column_default) s/optional-key)
-               (cond-> (column->schema column)
+               (cond-> column
+                 (#{"enum_in"} (str typinput)) (#(enum-schema db %))
+                 (not= "USER-DEFINED" data_type) column->schema
                  (re-find #"email" column_name) (s/constrained email-valid?)
                  character_maximum_length (s/constrained (max-length character_maximum_length)
                                                          'string-too-long)
@@ -75,8 +89,12 @@
                     [:= (table-primary-key db table) (#'ar/id this)])
         coerce (fn [datum]
                  ((coerce/coercer (table-schema db table)
-                                  (some-fn coerce/string-coercion-matcher
-                                           {s/Str str})) datum))]
+                                  (some-fn coerce/+string-coercions+
+                                           (->> coerce/+string-coercions+
+                                                (map #(update % 0 s/maybe))
+                                                (into {}))
+                                           {s/Str str}))
+                  datum))]
     {:id (fn [this]
            (get this (table-primary-key db table)))
      :new? (comp nil? #'ar/id)
