@@ -50,7 +50,6 @@
   (fn [s]
     (<= (count (str s)) n)))
 
-
 (defn enum-schema [db {:keys [oid]}]
   (->> (sql/format {:select [:enumlabel]
                     :from [:pg_enum]
@@ -84,7 +83,23 @@
                  (#{"YES"} is_nullable) s/maybe)]))
        (into {})))
 
-(defn base [db table]
+(def default-callbacks
+  (->> [:before-validation
+        :after-validation
+        :before-save
+        :after-save
+        :before-create
+        :after-create
+        :before-update
+        :after-update
+        :before-destroy
+        :after-destroy
+        :after-commit
+        :after-rollback]
+       (map #(vector % identity))
+       (into {})))
+
+(defn base [db table & {:keys [callbacks]}]
   (let [pk-clause (fn [this]
                     [:= (table-primary-key db table) (#'ar/id this)])
         coerce (fn [datum]
@@ -94,30 +109,51 @@
                                                 (map #(update % 0 s/maybe))
                                                 (into {}))
                                            {s/Str str}))
-                  datum))]
+                  datum))
+        create-or-update (fn [this]
+                           (if (#'ar/new? this)
+                             (->> this
+                                  coerce
+                                  (jdbc/insert! db table)
+                                  first
+                                  (merge this))
+                             (do
+                               (jdbc/execute! db
+                                              (sql/format {:update table
+                                                           :set (coerce this)
+                                                           :where (pk-clause this)}))
+                               (->> (sql/format {:select [:*]
+                                                 :from [table]
+                                                 :where (pk-clause this)})
+                                    (jdbc/query db)
+                                    first
+                                    (merge this)))))
+        {:keys [before-validation
+                after-validation
+                before-save
+                before-create
+                before-update
+                after-update
+                after-create
+                after-save]} (merge default-callbacks callbacks)]
     {:id (fn [this]
            (get this (table-primary-key db table)))
      :new? (comp nil? #'ar/id)
      :save (fn [this]
-             (when (#'ar/valid? this)
-               (if (#'ar/new? this)
-                 (->> this
-                      coerce
-                      (jdbc/insert! db table)
-                      first
-                      (merge this))
-                 (do
-                   (jdbc/execute! db
-                                  (sql/format {:update table
-                                               :sset (coerce this)
-                                               :where (pk-clause this)}))
-                   (->> (sql/format {:select [:*]
-                                     :from table
-                                     :where (pk-clause this)})
-                        (jdbc/execute! db)
-                        (merge this))))))
+             (let [new? (#'ar/new? this)
+                   prepared-for-validation (some-> this before-validation)]
+               (when (#'ar/valid? this)
+                 (cond-> prepared-for-validation
+                   true after-validation
+                   true before-save
+                   new? before-create
+                   (not new?) before-update
+                   true create-or-update
+                   (not new?) after-update
+                   new? after-create
+                   true after-save))))
      :errors (fn [this]
-               (let [coerced (coerce this)]
+               (let [coerced (-> this before-validation coerce)]
                  (when (error? coerced)
                    (:error coerced))))
      :valid? (comp empty? #'ar/errors)
