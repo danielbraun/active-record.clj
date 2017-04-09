@@ -8,4 +8,5 @@
   (id [this])
   (new? [this])
   (valid? [this])
-  (schema [this]))
+  (schema [this])
+  (coerce [this]))

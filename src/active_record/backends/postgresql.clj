@@ -99,36 +99,32 @@
        (map #(vector % identity))
        (into {})))
 
+(defn- pk-clause [this db table]
+  [:= (table-primary-key db table) (#'ar/id this)])
+
+(defn- create-or-update [this db table]
+  (if (#'ar/new? this)
+    (->> this (#'ar/coerce) (jdbc/insert! db table) first (merge this))
+    (do
+      (jdbc/execute! db (sql/format {:update table
+                                     :set (#'ar/coerce this)
+                                     :where (pk-clause this)}))
+      (->> (sql/format {:select [:*] :from [table] :where (pk-clause this)})
+           (jdbc/query db)
+           first
+           (merge this)))))
+
+(defn- schema-coerce [this db table]
+  ((coerce/coercer
+     (table-schema db table)
+     (some-fn coerce/+string-coercions+
+              (->> coerce/+string-coercions+
+                   (map #(update % 0 s/maybe))
+                   (into {}))
+              {s/Str str})) this))
+
 (defn base [db table & {:keys [callbacks]}]
-  (let [pk-clause (fn [this]
-                    [:= (table-primary-key db table) (#'ar/id this)])
-        coerce (fn [datum]
-                 ((coerce/coercer (table-schema db table)
-                                  (some-fn coerce/+string-coercions+
-                                           (->> coerce/+string-coercions+
-                                                (map #(update % 0 s/maybe))
-                                                (into {}))
-                                           {s/Str str}))
-                  datum))
-        create-or-update (fn [this]
-                           (if (#'ar/new? this)
-                             (->> this
-                                  coerce
-                                  (jdbc/insert! db table)
-                                  first
-                                  (merge this))
-                             (do
-                               (jdbc/execute! db
-                                              (sql/format {:update table
-                                                           :set (coerce this)
-                                                           :where (pk-clause this)}))
-                               (->> (sql/format {:select [:*]
-                                                 :from [table]
-                                                 :where (pk-clause this)})
-                                    (jdbc/query db)
-                                    first
-                                    (merge this)))))
-        {:keys [before-validation
+  (let [{:keys [before-validation
                 after-validation
                 before-save
                 before-create
@@ -153,7 +149,9 @@
                    new? after-create
                    true after-save))))
      :errors (fn [this]
-               (let [coerced (-> this before-validation coerce)]
+               (let [coerced (-> this
+                                 before-validation
+                                 (schema-coerce db table))]
                  (when (error? coerced)
                    (:error coerced))))
      :valid? (comp empty? #'ar/errors)
@@ -163,4 +161,9 @@
                                   :where (pk-clause this)})
                      (jdbc/execute! db))
                 nil)
-     :schema (fn [_] (table-schema db table))}))
+     :schema (fn [_] (table-schema db table))
+     :coerce (fn [this]
+               (let [coerced (-> this
+                                 before-validation
+                                 (schema-coerce db table))]
+                 (if (error? coerced) false coerced)))}))
