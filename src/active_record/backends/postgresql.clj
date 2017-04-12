@@ -144,7 +144,7 @@
                    true before-save
                    new? before-create
                    (not new?) before-update
-                   true create-or-update
+                   true (create-or-update db table)
                    (not new?) after-update
                    new? after-create
                    true after-save))))
