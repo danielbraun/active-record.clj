@@ -43,7 +43,8 @@
 (defmethod column->schema "interval" [_] Interval)
 (defmethod column->schema "numeric" [_] s/Num)
 (defmethod column->schema "text" [_] s/Str)
-(defmethod column->schema "timestamptz" [_] s/Inst)
+(defmethod column->schema "timestamptz" [_]
+  (if (find-ns 'clj-time.jdbc) org.joda.time.DateTime s/Inst))
 (defmethod column->schema "varchar" [_] s/Str)
 
 (defn max-length [n]
@@ -166,4 +167,4 @@
                (let [coerced (-> this
                                  before-validation
                                  (schema-coerce db table))]
-                 (if (error? coerced) false coerced)))}))
+                 (if (error? coerced) false (merge this coerced))))}))
